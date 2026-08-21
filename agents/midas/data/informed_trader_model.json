@@ -1,0 +1,26 @@
+{
+  "kind": "logistic_regression",
+  "classes": [
+    "0",
+    "1"
+  ],
+  "coef": [
+    [
+      0.025210618728745776,
+      2.8362919313950674,
+      6.92534921589617,
+      3.5524213998454126,
+      0.942523378979703
+    ]
+  ],
+  "intercept": [
+    -14.581062751487083
+  ],
+  "feature_order": [
+    "obi",
+    "vpin",
+    "trade_size_zscore",
+    "cancel_rate",
+    "obi_velocity"
+  ]
+}

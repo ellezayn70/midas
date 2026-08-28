@@ -4,12 +4,13 @@ description: >-
   Tick playbook for MIDAS — hybrid spot+perp market maker on Bitget.
   Refresh books, run the ML shield, hedge to flat, quote both books,
   journal. Wide, slow, always delta-neutral.
-agent_key: custom@opencode-go:deepseek-v4-flash
+agent_key: claude-acp:sonnet
 skills: []
 default_config:
   execution_mode: loop
-  frequency_sec: 600
+  frequency_sec: 30
   max_ticks: 0
+  size_mode: test
   total_amount_quote: 800
   risk_limits:
     max_position_size_quote: 800
@@ -18,14 +19,19 @@ default_config:
     max_leverage: 1
     require_triple_barrier: true
     require_trailing_stop: true
+  # Self-healing: the engine force-closes any delta drift the LLM tick
+  # failed to hedge (model stall / ACP hang / network blip). Runs DETERMINISTICALLY
+  # every tick, after the LLM turn. midas_selfheal is the only MIDAS routine
+  # permitted to place an order outside the LLM turn.
+  self_heal_routine: midas_selfheal
 default_trading_context: >-
-  Trade BTC-USDT, ETH-USDT, SOL-USDT and XAU-USDT on bitget_perpetual
-  (perps) and bitget (spot for BTC/ETH/SOL only). Quote BOTH books where
-  they exist. Delta-neutral is mandatory. ML CANCEL outranks you. $100
-  notional per side at 1x on BOTH books. Wide spreads (0.10%+ per side),
-  10-min ticks. Every create MUST send total_amount_quote, controller_id
-  INSIDE executor_config, and the full barrier: SL 3% / TP 3% / 3h /
-  trailing 1.5% / 1.5%, leverage 1.
+  Trade BTC-USDT and SOL-USDT ONLY on bitget_perpetual (perps) and bitget
+  (spot for BTC/SOL). Quote BOTH books. Delta-neutral mandatory. ML CANCEL
+  outranks you. TEST size: $8 quote notional per side at 1x, matching $8
+  perp hedge = $16 per pair. Do NOT trade ETH or XAU (exceeds test wallet).
+  Wide spreads (0.10%+ per side), 10-min ticks. Every create MUST send
+  total_amount_quote, controller_id INSIDE executor_config, and the full
+  barrier: SL 3% / TP 3% / 3h / trailing 1.5% / 1.5%, leverage 1.
 created_by: 0
 created_at: '2026-08-17T00:00:00+00:00'
 ---
@@ -61,6 +67,13 @@ Two caps:
 (spot bid+ask AND perp bid+ask) on every pair at once.
 
 ## Tick sequence (every 10 minutes)
+
+**0 — Self-heal (automatic).** The engine runs `midas_selfheal` deterministically
+every tick, AFTER your turn, win or timeout. If your tick stalled and a spot fill
+is sitting unhedged (net delta outside the cap with no matching perp executor
+RUNNING), it FORCE-PLACES the `SHORT_PERP` hedge for you. You do not call it —
+trust it as the backstop. If it fires, the journal shows a `self_heal` action;
+reconcile your next tick to its state.
 
 **1 — Health.** If `midas_data` or `midas_signal` returned NO DATA for a
 pair, that pair stands aside. Never quote blind.
@@ -123,7 +136,7 @@ Barriers (SL 3% / TP 3% / 3h / trail 1.5%) do the exits. Do not micromanage.
 
 Fetch the schema first. The risk gate refuses a create without
 `total_amount_quote` and a full barrier. Put `controller_id` **INSIDE**
-`executor_config` (the gate reads it only there — same as GateForum).
+`executor_config` (the risk gate reads it only there).
 
 ```
 manage_executors(

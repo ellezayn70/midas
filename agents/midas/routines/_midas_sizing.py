@@ -60,7 +60,7 @@ def mem_key(prefix: str, pair: str) -> str:
 
 
 async def read_json_memory(name: str) -> dict:
-    """GateForum pattern: manage_memory returns {name, content: json-string}."""
+    """MIDAS pattern: manage_memory returns {name, content: json-string}."""
     try:
         from mcp_servers.condor.tools import memory
 

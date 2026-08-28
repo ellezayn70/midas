@@ -68,7 +68,7 @@ class Config(BaseModel):
     """Compute MIDAS quote gates, adaptive spreads and arbitrage signals."""
 
     pairs: str = Field(
-        default="BTC-USDT,ETH-USDT,SOL-USDT,XAU-USDT",
+        default="BTC-USDT,SOL-USDT",
         description="Comma-separated pairs to compute signals for",
     )
     base_spread_pct: float = Field(
@@ -193,7 +193,7 @@ def arbitrage_check(perp_mid: float, spot_mid: float | None,
 async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
     pairs = [p.strip() for p in config.pairs.split(",") if p.strip()]
 
-    # GateForum pattern: memory returns {name, content: json-string}.
+    # MIDAS pattern: memory returns {name, content: json-string}.
     cached: dict[str, dict] = {}
     for pair in pairs:
         cached[pair] = await read_json_memory(f"midas_micro_{pair.replace('-', '_')}")

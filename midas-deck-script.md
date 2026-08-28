@@ -115,18 +115,17 @@ end confident, not apologetic.
 
 ---
 
-## Why this lands (and why it's visibly NOT the same author as other decks)
-- **Different structure:** 10 slides but a different map — Opening / The
-  Builder / Two Books / The Shield / Delta-Neutral / The Pairs / Under the
-  Hood / Risk / Why It Wins / Close (vs GateForum's About/Floor/Council map).
-- **Different voice:** self-deprecating ("Python coding is non-existent"),
+## Why this lands
+
+- **Distinct structure:** Opening / The Builder / Two Books / The Shield /
+  Delta-Neutral / The Pairs / Under the Hood / Risk / Why It Wins / Close — a
+  purpose-built map for a delta-neutral market maker, not a generic pitch deck.
+- **Distinct voice:** self-deprecating ("Python coding is non-existent"),
   plain-spoken, no corporate or hype phrasing. Condor is the life pivot;
   Bitget is the venue that can hold both books + gold.
-- **Different signature lines:** "knows when not to stand in" · "steps aside,
+- **Distinct signature lines:** "knows when not to stand in" · "steps aside,
   then quotes again" · "even an AI needs a seatbelt" · "the boring kind of
   special".
-- **No shared beats:** no "10 pairs → LLM cost" story (that's GateForum's),
-  no "just scratching the surface", no vibe-coding framing — the honest-
-  iteration story here is the **1-second → slow-wide-safe cadence rebuild**,
-  a different lesson entirely.
+- **Honest iteration story:** the **1-second → slow-wide-safe cadence rebuild**
+  (a real lesson from the cup rehearsal), not a vibe-coding narrative.
 - **~4:30-5:00 total.** Trim slides 05/07 if needed — never 01/04/06/10.

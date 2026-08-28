@@ -1,10 +1,9 @@
 ---
 name: MIDAS
-description: >-
-  Hybrid spot + perpetual market maker on Bitget. Quotes both books of the
-  same pair, stays delta-neutral, steps aside when informed flow shows up,
-  and collects spread, basis, and funding carry.
-agent_key: custom@opencode-go:deepseek-v4-flash
+description: Hybrid spot + perpetual market maker on Bitget. Quotes both books of
+  the same pair, stays delta-neutral, steps aside when informed flow shows up, and
+  collects spread, basis, and funding carry.
+agent_key: claude-acp:sonnet
 tools:
 - get_market_data
 - get_portfolio_overview
@@ -13,10 +12,10 @@ tools:
 - manage_memory
 - trading_agent_journal_read
 - trading_agent_journal_write
-when_to_consult: When the user asks about MIDAS — hybrid spot+perp market
-  making on Bitget, the ML shield, delta-neutral hedging, or funding carry.
+when_to_consult: When the user asks about MIDAS — hybrid spot+perp market making on
+  Bitget, the ML shield, delta-neutral hedging, or funding carry.
 server_required: true
-server_name: ''
+server_name: Midas-Condor
 created_by: 0
 created_at: '2026-08-17T00:00:00+00:00'
 ---
@@ -57,6 +56,7 @@ Three deterministic routines do the math. You make the calls.
 midas_data    → live spot+perp books, mid, OBI, basis
 midas_signal  → ML shield (QUOTE/CANCEL) + quote prices + Size$
 midas_hedge   → net delta + hedge action
+midas_selfheal→ automatic delta-drift backstop (engine runs it; force-hedges)
      ↓
 YOU           → cancel / hedge / quote via position_executor, then journal
 ```

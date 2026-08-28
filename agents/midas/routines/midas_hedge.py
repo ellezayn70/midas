@@ -48,7 +48,7 @@ class Config(BaseModel):
     """Compute delta-neutral hedge requirements for MIDAS pairs."""
 
     pairs: str = Field(
-        default="BTC-USDT,ETH-USDT,SOL-USDT,XAU-USDT",
+        default="BTC-USDT,SOL-USDT",
         description="Comma-separated pairs to hedge (HB format)",
     )
     max_delta_usd: float = Field(

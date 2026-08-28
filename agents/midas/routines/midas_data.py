@@ -37,12 +37,12 @@ class Config(BaseModel):
     """Fetch spot + perp order books and microstructure for MIDAS pairs."""
 
     pairs: str = Field(
-        default="BTC-USDT,ETH-USDT,SOL-USDT,XAU-USDT",
+        default="BTC-USDT,SOL-USDT",
         description="Comma-separated pairs to fetch (Hummingbot format; XAU is perp-only on Bitget)",
     )
     depth: int = Field(default=20, description="Order book depth per side")
     spot_books: str = Field(
-        default="BTC-USDT,ETH-USDT,SOL-USDT",
+        default="BTC-USDT,SOL-USDT",
         description="Pairs that ALSO have a spot book (XAU is perp-only)",
     )
 
@@ -123,7 +123,7 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
 
             table.append(row)
 
-    # Persist for midas_signal + the tick (same store as gateforum_data).
+    # Persist for midas_signal + the tick (shared MIDAS memory store).
     from mcp_servers.condor.tools import memory
 
     for item in table:

@@ -1,5 +1,19 @@
+# Python
 __pycache__/
 *.pyc
+*.pyo
+.venv/
+
+# Runtime artifacts (per-session, not part of the agent)
 sessions/
 session_state.json
-.venv/
+learnings.md
+dry_runs/
+
+# OS / editor
+.DS_Store
+*.swp
+
+# Runtime memory/state store (per-user, not part of the agent)
+store/
+learnings.md

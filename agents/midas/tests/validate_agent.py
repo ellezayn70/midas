@@ -53,7 +53,7 @@ if not agent:
 else:
     print(f"  [OK] agent slug={agent.slug} key={agent.agent_key} created_by={agent.created_by}")
     if str(agent.created_by) == "5587715073":
-        print("  [FAIL] created_by must not be Carlito's Telegram id")
+        print("  [FAIL] created_by must not be a personal Telegram id")
         ok = False
     banned = ("hy3", "deepseek", "opencode-go")
     body = (agent.instructions or "").lower()

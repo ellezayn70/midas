@@ -151,9 +151,9 @@ manage_executors(
     leverage=1,
     controller_id=<this session's controller_id>,   # INSIDE, not top-level
     triple_barrier_config={
-      "stop_loss": 0.03,
-      "take_profit": 0.03,
-      "time_limit": 10800,
+      "stop_loss": 0.02,
+      "take_profit": 0.02,
+      "time_limit": 3600,
       "trailing_stop": {"activation_price": 0.015, "trailing_delta": 0.015},
       "open_order_type": 2
     }

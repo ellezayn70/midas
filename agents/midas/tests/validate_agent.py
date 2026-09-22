@@ -5,6 +5,7 @@ Organizers: run from the Condor repo root
 """
 import inspect
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -32,7 +33,7 @@ if "midas_sizing" in found:
     ok = False
 
 print("\n=== ROUTINE CONTRACT ===")
-VALID = {"Market Data", "Analysis", "Arbitrage", "Monitoring"}
+VALID = {"Market Data", "Analysis", "Arbitrage", "Monitoring", "Safety", "Uncategorized"}
 for name, info in sorted(found.items()):
     has_run = inspect.iscoroutinefunction(info.run_fn)
     good = has_run and info.config_class is not None and info.category in VALID
@@ -44,7 +45,8 @@ for name, info in sorted(found.items()):
 
 print("\n=== AGENT / STRATEGY LOADING ===")
 from condor.agents.agent import AgentStore
-from condor.agents.strategy import StrategyStore, _slugify
+from condor.agents.strategy import StrategyStore
+from condor.frontmatter import slugify
 
 agent = AgentStore().get("midas")
 if not agent:
@@ -52,10 +54,14 @@ if not agent:
     ok = False
 else:
     print(f"  [OK] agent slug={agent.slug} key={agent.agent_key} created_by={agent.created_by}")
-    if str(agent.created_by) == "<REDACTED_TG_ID>":
-        print("  [FAIL] created_by must not be a personal Telegram id")
+    created_by = str(agent.created_by or "0")
+    if created_by not in ("0", "None", ""):
+        print(f"  [FAIL] created_by={created_by} pins the agent to a real user id")
         ok = False
-    banned = ("hy3", "deepseek", "opencode-go")
+    # agent_key may name the provider/model; the body must not repeat it.
+    banned = tuple(dict.fromkeys(
+        b for b in re.split(r"[:/@.-]+", str(agent.agent_key or "").lower()) if len(b) > 3
+    ))
     body = (agent.instructions or "").lower()
     leaked = [b for b in banned if b in body]
     # agent_key may name the model; body must not (deck/submitter firewall)
@@ -76,7 +82,7 @@ for s in strats:
     if not isinstance(rl, dict) or not rl.get("require_triple_barrier"):
         print("  [FAIL] risk_limits must be nested and require_triple_barrier=true")
         ok = False
-    exp = _slugify(s.name)
+    exp = slugify(s.name)
     d = (REPO / "agents/midas/strategies" / exp).is_dir()
     ok &= d
     print(f"  [{'OK' if d else 'FAIL'}] folder '{exp}' matches slugified name")

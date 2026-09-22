@@ -17,7 +17,6 @@ tools:
 when_to_consult: When the user asks about MIDAS — hybrid spot+perp market making on
   Bitget, the ML shield, delta-neutral hedging, or funding carry.
 server_required: true
-server_name: Midas-Condor
 created_by: 0
 created_at: '2026-08-17T00:00:00+00:00'
 ---

@@ -8,7 +8,9 @@ subprocess hang, network blip), a spot fill sits UNHEDGED — the exact failure
 we hit in the cup rehearsal. The whole point of MIDAS is delta-neutral; an
 unhedged spot book is the one thing that must never persist.
 
-This routine is the non-LLM backstop. Condor has no post-turn routine hook, so the tick calls it explicitly as its final step (see the strategy's tick sequence). It reads exchange truth, recomputes the
+This routine is the non-LLM backstop. It runs every tick (the engine calls it
+deterministically after the LLM turn, win or timeout, when the strategy sets
+`self_heal_routine: midas_selfheal`). It reads exchange truth, recomputes the
 delta verdict, and FORCE-PLACES the hedge via the executor API if the net delta
 is outside the cap and no matching perp executor is already RUNNING.
 

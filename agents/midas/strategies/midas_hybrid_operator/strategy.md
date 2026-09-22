@@ -19,9 +19,11 @@ default_config:
     max_leverage: 1
     require_triple_barrier: true
     require_trailing_stop: true
-  # Self-healing backstop: midas_selfheal force-closes any delta drift
-  # this tick failed to hedge. Condor has no post-turn routine hook, so the
-  # tick calls it itself as its last step (see the tick sequence).
+  # Self-healing: the engine force-closes any delta drift the LLM tick
+  # failed to hedge (model stall / ACP hang / network blip). Runs DETERMINISTICALLY
+  # every tick, after the LLM turn. midas_selfheal is the only MIDAS routine
+  # permitted to place an order outside the LLM turn.
+  self_heal_routine: midas_selfheal
 default_trading_context: >-
   Trade BTC-USDT and SOL-USDT ONLY on bitget_perpetual (perps) and bitget
   (spot for BTC/SOL). Quote BOTH books. Delta-neutral mandatory. ML CANCEL
@@ -67,6 +69,12 @@ Two caps:
 
 ## Tick sequence
 
+**0 — Self-heal (automatic).** The engine runs `midas_selfheal` deterministically
+every tick, AFTER your turn, win or timeout. If your tick stalled and a spot fill
+is sitting unhedged (net delta outside the cap with no matching perp executor
+RUNNING), it FORCE-PLACES the `SHORT_PERP` hedge for you. You do not call it —
+trust it as the backstop. If it fires, the journal shows a `self_heal` action;
+reconcile your next tick to its state.
 
 **1 — Health.** If `midas_data` or `midas_signal` returned NO DATA for a
 pair, that pair stands aside. Never quote blind.
@@ -124,14 +132,6 @@ Barriers (SL 2% / TP 2% / 1h / trail 1.5%) do the exits. Do not micromanage.
 - Quotes (price/side/size) and fills
 - Funding / executor count / drawdown %
 - `Cooldowns:` line (`none` if empty)
-
-**10 - Self-heal backstop.** Close the tick with
-`manage_routines(action="run", name="midas_selfheal", agent="midas", config={"pairs": "<this session's pairs>", "controller_id": "<this session's controller_id>"})`.
-Condor has no post-turn routine hook - this call IS the backstop. If you skip
-it, an unhedged spot fill stays unhedged. It reads exchange truth, recomputes
-the net delta, and FORCE-PLACES the `SHORT_PERP` hedge when a fill is sitting
-unhedged with no matching perp executor RUNNING. If it fires, the journal
-shows a `self_heal` action; reconcile your next tick to its state.
 
 ## Call shape (REQUIRED)
 

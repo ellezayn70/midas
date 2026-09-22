@@ -11,7 +11,7 @@ unhedged spot book is the one thing that must never persist.
 This routine is the non-LLM backstop. It runs every tick (the engine calls it
 deterministically after the LLM turn, win or timeout, when the strategy sets
 `self_heal_routine: midas_selfheal`). It reads exchange truth, recomputes the
-delta verdict, and FORCE-PLACES the hedge via manage_executors if the net delta
+delta verdict, and FORCE-PLACES the hedge via the executor API if the net delta
 is outside the cap and no matching perp executor is already RUNNING.
 
 It is the ONLY MIDAS routine permitted to place an order outside the LLM turn.

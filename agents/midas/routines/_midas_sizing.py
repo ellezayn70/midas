@@ -18,12 +18,13 @@ logger = logging.getLogger(__name__)
 CUP_PER_SIDE = 100.0
 CUP_MAX_DELTA = 25.0
 
-# Live Bitget USDT-M mins (qty × mark) + buffer, 2026-08-18.
-# Spot minTradeUSDT is $1 — perp qty is the binding constraint.
+# Live Bitget USDT-M mins (qty × mark) + buffer, recomputed 2026-09-22.
+# Spot minTradeUSDT is $1 — perp qty is the binding constraint, so these must clear 0.0001 BTC and 0.1 SOL at
+# the current mark or the create is refused as below the venue minimum.
 TEST_PER_SIDE: dict[str, float] = {
-    "BTC-USDT": 8.0,
+    "BTC-USDT": 14.0,
     "ETH-USDT": 20.0,
-    "SOL-USDT": 8.0,
+    "SOL-USDT": 16.0,
     "XAU-USDT": 45.0,
 }
 TEST_MAX_DELTA = 3.0

@@ -27,11 +27,12 @@ default_config:
 default_trading_context: >-
   Trade BTC-USDT and SOL-USDT ONLY on bitget_perpetual (perps) and bitget
   (spot for BTC/SOL). Quote BOTH books. Delta-neutral mandatory. ML CANCEL
-  outranks you. TEST size: $8 quote notional per side at 1x, matching $8
-  perp hedge = $16 per pair. Do NOT trade ETH or XAU (exceeds test wallet).
-  Wide spreads (0.10%+ per side), 10-min ticks. Every create MUST send
-  total_amount_quote, controller_id INSIDE executor_config, and the full
-  barrier: SL 3% / TP 3% / 3h / trailing 1.5% / 1.5%, leverage 1.
+  outranks you. TEST size: BTC $14 and SOL $16 quote notional per side at
+  1x, with a matching perp hedge per pair. Do NOT trade ETH or XAU (exceeds
+  test wallet). Wide spreads (0.10%+ per side). Every create MUST call
+  create_position_executor with FLAT args: amount in BASE units
+  (= Size$ / entry_price) and top-level controller_id, plus the full
+  barrier: SL 2% / TP 2% / 1h / trailing 1.5% / 1.5%, leverage 1.
 created_by: 0
 created_at: '2026-08-17T00:00:00+00:00'
 ---
@@ -89,17 +90,17 @@ the **same** `size_mode`. Verdicts: `OK` / `SHORT_PERP` / `REDUCE_PERP_SHORT`.
 `midas_hedge` reads the **spot wallet** (not just memory). Trust its
 `Spot$` / `Hedge` columns over your last journal line.
 
-**4b — Every tick, search executors.** `manage_executors(action="search")`
+**4b — Every tick, search executors.** `list_executors(status="RUNNING")`
 for this `controller_id`. A RUNNING row with `filled_amount_quote > 0` is
 a **fill / hedge**, not a resting quote. Do **not** stop it to "refresh".
 Only cancel rows with `filled_amount_quote == 0`. If 4/4 slots are filled
 inventory+hedge and `midas_hedge` says OK, this tick is a hold.
 
-**5 — Shield first.** Any pair marked `CANCEL`: stop/cancel all executors
-on that pair. No new quotes. Journal it. Re-evaluate next tick.
+**5 — Shield first.** Any pair marked `CANCEL`: cancel every executor on
+that pair with `stop_executor(executor_id=...)`. No new quotes. Journal it. Re-evaluate next tick.
 
 **6 — Hedge deltas** before quoting more.
-- `SHORT_PERP` → perp SHORT, `total_amount_quote = hedge_usd` (≤ pair Size$), 1x, full barrier.
+- `SHORT_PERP` → perp SHORT, `amount = hedge_usd / entry_price` (≤ pair Size$), 1x, full barrier.
 - `REDUCE_PERP_SHORT` → reduce the perp short (or add spot LONG) until net Δ is inside the cap.
 
 **7 — Quote.** Shield `QUOTE` and hedge `OK`:
@@ -123,7 +124,7 @@ manage_memory(
 ```
 
 LONG spot is positive USDT; a sold-down inventory is smaller / negative.
-Barriers (SL 3% / TP 3% / 3h / trail 1.5%) do the exits. Do not micromanage.
+Barriers (SL 2% / TP 2% / 1h / trail 1.5%) do the exits. Do not micromanage.
 
 **9 — Journal** with `trading_agent_journal_write`, every tick:
 - Shield per pair (`QUOTE`/`CANCEL` + P(informed))
@@ -134,36 +135,33 @@ Barriers (SL 3% / TP 3% / 3h / trail 1.5%) do the exits. Do not micromanage.
 
 ## Call shape (REQUIRED)
 
-Fetch the schema first. The risk gate refuses a create without
-`total_amount_quote` and a full barrier. Put `controller_id` **INSIDE**
-`executor_config` (the risk gate reads it only there).
+Arguments are **flat** - there is no `executor_config` wrapper, and no
+`total_amount_quote` (that field belongs to the grid executor). `amount`
+is in **BASE** units, so size it as `Size$ / entry_price`. Both `amount`
+and `controller_id` are required: the risk gate attributes the position
+only from the top-level `controller_id`.
 
 ```
-manage_executors(
-  action="create",                         # REQUIRED — omit this and you only get the schema
-  executor_type="position_executor",
-  executor_config={
-    connector_name="bitget" | "bitget_perpetual",
-    trading_pair=<pair>,
-    side=1 if BUY/LONG else 2,
-    total_amount_quote=<Size$>,            # REQUIRED
-    amount=<Size$ / entry_price>,          # base units
-    leverage=1,
-    controller_id=<this session's controller_id>,   # INSIDE, not top-level
-    triple_barrier_config={
-      "stop_loss": 0.02,
-      "take_profit": 0.02,
-      "time_limit": 3600,
-      "trailing_stop": {"activation_price": 0.015, "trailing_delta": 0.015},
-      "open_order_type": 2
-    }
-  }
+create_position_executor(
+  connector_name="bitget" | "bitget_perpetual",
+  trading_pair=<pair>,
+  side=1 if BUY/LONG else 2,
+  amount=<Size$ / entry_price>,           # REQUIRED - BASE units, not USD
+  entry_price=<limit price>,
+  leverage=1,
+  controller_id=<this session's controller_id>,   # top-level, REQUIRED
+  stop_loss=0.02,                         # author barrier: SL/TP 2%, 1h
+  take_profit=0.02,
+  time_limit=3600,
+  trailing_stop_activation_price=0.015,
+  trailing_stop_trailing_delta=0.015,
+  open_order_type=2                       # 1=MARKET 2=LIMIT 3=LIMIT_MAKER
 )
 ```
 
-Never call `manage_executors(action="create")` with an empty body. The
-full `executor_config` (including `controller_id`) must be in the **same**
-call. A create with only `executor_type` is blocked as missing controller_id.
+Never call `create_position_executor` without `amount` and `controller_id` -
+a create missing either is refused. There is no schema-fetch round trip
+any more: pass the whole call in one go.
 
 Hedge creates use the same barrier and `leverage=1`. Size them to
 `hedge_usd`, not a second full Size$ if the fill was smaller.

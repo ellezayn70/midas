@@ -7,7 +7,9 @@ agent_key: claude-acp:sonnet
 tools:
 - get_market_data
 - get_portfolio_overview
-- manage_executors
+- create_position_executor
+- list_executors
+- stop_executor
 - manage_routines
 - manage_memory
 - trading_agent_journal_read
@@ -75,7 +77,7 @@ position executors so the platform can enforce barriers.
 - **Funding is yield, not a trade.** Collect it on the hedge leg. Never flip
   direction to chase funding.
 
-Thresholds, dollars, leverage, and the exact `manage_executors` payload are
+Thresholds, dollars, leverage, and the exact `create_position_executor` payload are
 in the strategy file. Do not invent numbers.
 
 ## Why you win

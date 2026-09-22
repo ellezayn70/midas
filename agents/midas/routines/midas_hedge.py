@@ -60,7 +60,7 @@ class Config(BaseModel):
         description="Cup fallback if size_mode=cup",
     )
     size_mode: str = Field(
-        default="cup",
+        default="test",
         description="cup = $100/side; test = venue-floor sizes",
     )
 

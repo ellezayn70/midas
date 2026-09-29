@@ -9,6 +9,13 @@ briefing plus a dashboard report.
 Hybrid by design: each pair is fetched on BOTH books when it exists there —
 spot (`bitget`) and perpetuals (`bitget_perpetual`). The two mids are the raw
 material for the delta-neutral hedge and the basis signal.
+
+Trend detection: a short rolling buffer of recent perp mids (persisted in
+memory across ticks, since routines are stateless per call) classifies each
+pair UP/DOWN/SIDEWAYS and tracks how many consecutive ticks the same
+direction has held. This "trend" field feeds midas_signal's existing
+asymmetric-spread skew (previously always SIDEWAYS — this was never wired
+up) and the streak feeds midas_hedge/midas_selfheal's trend-aware delta band.
 """
 
 import asyncio
@@ -16,11 +23,24 @@ import json
 import logging
 from datetime import datetime, timezone
 
+import sys as _sys
+from pathlib import Path as _P
+
 import aiohttp
 from pydantic import BaseModel, Field
 from telegram.ext import ContextTypes
 
 logger = logging.getLogger(__name__)
+
+# `agents/` is not an importable package, so this folder's own sizing helper
+# (`_midas_sizing.py`) can't be reached with a normal package-relative
+# import. Put this folder on sys.path once and import it directly — plain
+# `import`, no manual module-spec plumbing, and importing it a second time
+# from a sibling routine is a no-op (Python's own import cache handles it).
+_ROUTINES_DIR = str(_P(__file__).resolve().parent)
+if _ROUTINES_DIR not in _sys.path:
+    _sys.path.insert(0, _ROUTINES_DIR)
+import _midas_sizing as _sz
 
 CATEGORY = "Market Data"
 
@@ -32,12 +52,24 @@ _PERP_BOOK = "https://api.bitget.com/api/v2/mix/market/orderbook"
 # HB pair format BTC-USDT is converted by stripping the dash).
 _WIRE = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "SOL": "SOLUSDT", "XAU": "XAUUSDT"}
 
+# Trend classification: compare oldest vs newest mid in a short rolling
+# buffer. Threshold matches the base half-spread (0.10%) so a pair only
+# flips to UP/DOWN once it has moved at least one spread-width — enough to
+# be a real move, not tick noise, at a 30s cadence.
+_TREND_BUFFER_LEN = 6
+_TREND_THRESHOLD_PCT = 0.10
+
+
+mem_key = _sz.mem_key
+read_json_memory = _sz.read_json_memory
+write_json_memory = _sz.write_json_memory
+
 
 class Config(BaseModel):
     """Fetch spot + perp order books and microstructure for MIDAS pairs."""
 
     pairs: str = Field(
-        default="BTC-USDT,SOL-USDT",
+        default="BTC-USDT,SOL-USDT,XAU-USDT",
         description="Comma-separated pairs to fetch (Hummingbot format; XAU is perp-only on Bitget)",
     )
     depth: int = Field(default=20, description="Order book depth per side")
@@ -90,6 +122,50 @@ def _micro(bids: list, asks: list) -> dict:
     }
 
 
+def _classify_trend(buf: list[float]) -> str:
+    if len(buf) < 2:
+        return "SIDEWAYS"
+    old, new = buf[0], buf[-1]
+    if old <= 0:
+        return "SIDEWAYS"
+    pct = (new - old) / old * 100.0
+    if pct >= _TREND_THRESHOLD_PCT:
+        return "UP"
+    if pct <= -_TREND_THRESHOLD_PCT:
+        return "DOWN"
+    return "SIDEWAYS"
+
+
+async def _update_trend(pair: str, mid: float) -> dict:
+    """Roll this tick's mid into the buffer, classify, update the streak.
+
+    Persisted as one memory record per pair: {"mids": [...], "trend": "...",
+    "streak": N}. Streak counts consecutive ticks the SAME non-SIDEWAYS
+    trend has held; it resets on a flip or a SIDEWAYS read.
+    """
+    key = mem_key("midas_trend", pair)
+    rec = await read_json_memory(key)
+    buf = list(rec.get("mids") or [])
+    prev_trend = str(rec.get("trend") or "SIDEWAYS").upper()
+    prev_streak = int(rec.get("streak") or 0)
+
+    buf.append(mid)
+    if len(buf) > _TREND_BUFFER_LEN:
+        buf = buf[-_TREND_BUFFER_LEN:]
+
+    trend = _classify_trend(buf)
+    if trend != "SIDEWAYS" and trend == prev_trend:
+        streak = prev_streak + 1
+    elif trend != "SIDEWAYS":
+        streak = 1
+    else:
+        streak = 0
+
+    out = {"mids": buf, "trend": trend, "streak": streak}
+    await write_json_memory(key, out, description=f"MIDAS trend state for {pair}")
+    return out
+
+
 async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
     pairs = [p.strip() for p in config.pairs.split(",") if p.strip()]
     spot_set = {p.strip() for p in config.spot_books.split(",") if p.strip()}
@@ -121,9 +197,15 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
                     if "perp_mid" in row and "spot_mid" in row:
                         row["basis_bps"] = round((row["perp_mid"] - row["spot_mid"]) / row["spot_mid"] * 10_000, 2)
 
+            # Trend + persistence streak (perp mid — always present when we have data).
+            if "perp_mid" in row:
+                trend_state = await _update_trend(pair, row["perp_mid"])
+                row["trend"] = trend_state["trend"]
+                row["trend_streak"] = trend_state["streak"]
+
             table.append(row)
 
-    # Persist for midas_signal + the tick (shared MIDAS memory store).
+    # Persist for midas_signal + the tick (same store as before).
     from mcp_servers.condor.tools import memory
 
     for item in table:
@@ -147,13 +229,16 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
             line.append(f"spot {row['spot_mid']:.4f} (spread {row['spot_spread_pct']:.3f}% OBI {row['spot_obi']:+.3f})")
         if "basis_bps" in row:
             line.append(f"basis {row['basis_bps']:+.1f} bps")
+        if "trend" in row:
+            line.append(f"trend {row['trend']} (streak {row['trend_streak']})")
         briefing.append("  • " + " | ".join(line))
 
     summary = (
         f"MIDAS microstructure briefing @ {now}\n" + "\n".join(briefing)
         + "\n\nBasis = perp mid − spot mid (positive → perps rich, SHORT perp / LONG spot leg). "
         "OBI > +0.3 = buy pressure (lean short), OBI < −0.3 = sell pressure (lean long). "
-        "XAU is perp-only — no spot leg, no basis."
+        "XAU is perp-only — no spot leg, no basis. Trend/streak feed the quote skew "
+        "and the trend-aware delta band in midas_hedge/midas_selfheal."
     )
 
     from condor.reports import ReportBuilder
@@ -171,8 +256,9 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
             "Perp OBI": f"{r.get('perp_obi', 0):+.3f}",
             "Spot Mid": f"{r.get('spot_mid', 0):.4f}" if "spot_mid" in r else "—",
             "Basis bps": f"{r.get('basis_bps', 0):+.1f}" if "basis_bps" in r else "—",
+            "Trend": f"{r.get('trend', '—')} ({r.get('trend_streak', 0)})" if "trend" in r else "—",
         } for r in table],
-        ["Pair", "Perp Mid", "Perp Spread", "Perp OBI", "Spot Mid", "Basis bps"],
+        ["Pair", "Perp Mid", "Perp Spread", "Perp OBI", "Spot Mid", "Basis bps", "Trend"],
     )
     builder.manual_order()
     report_id = await builder.save()

@@ -24,15 +24,18 @@ default_config:
   # every tick, after the LLM turn. midas_selfheal is the only MIDAS routine
   # permitted to place an order outside the LLM turn.
   self_heal_routine: midas_selfheal
+  self_heal_dry_run: false   # backstop may now place the reconciling hedge
 default_trading_context: >-
-  Trade BTC-USDT and SOL-USDT ONLY on bitget_perpetual (perps) and bitget
-  (spot for BTC/SOL). Quote BOTH books. Delta-neutral mandatory. ML CANCEL
-  outranks you. TEST size: BTC $14 and SOL $16 quote notional per side at
-  1x, with a matching perp hedge per pair. Do NOT trade ETH or XAU (exceeds
-  test wallet). Wide spreads (0.10%+ per side). Every create MUST call
-  create_position_executor with FLAT args: amount in BASE units
-  (= Size$ / entry_price) and top-level controller_id, plus the full
-  barrier: SL 2% / TP 2% / 1h / trailing 1.5% / 1.5%, leverage 1.
+  Trade BTC-USDT, SOL-USDT and XAU-USDT on bitget_perpetual (perps), plus
+  bitget spot for BTC/SOL only (XAU has no Bitget spot gold book — perp
+  only, never invent a spot leg for it). Quote BOTH books where they exist.
+  Delta-neutral mandatory for BTC/SOL. ML CANCEL outranks you. TEST size:
+  BTC $14, SOL $16, XAU $45 quote notional per side at 1x, with a matching
+  perp hedge/reduce per pair. Do NOT trade ETH (exceeds test wallet). Wide
+  spreads (0.10%+ per side). Every create MUST call create_position_executor
+  with FLAT args: amount in BASE units (= Size$ / entry_price) and top-level
+  controller_id, plus the full barrier: SL 2% / TP 2% / 1h / trailing
+  1.5% / 1.5%, leverage 1.
 created_by: 0
 created_at: '2026-08-17T00:00:00+00:00'
 ---
@@ -104,9 +107,16 @@ that pair with `stop_executor(executor_id=...)`. No new quotes. Journal it. Re-e
 - `REDUCE_PERP_SHORT` → reduce the perp short (or add spot LONG) until net Δ is inside the cap.
 
 **7 — Quote.** Shield `QUOTE` and hedge `OK`:
-- BTC/ETH/SOL — spot BUY at `buy`, spot SELL at `sell` on `bitget`. Matching
+- BTC/SOL — spot BUY at `buy`, spot SELL at `sell` on `bitget`. Matching
   perp limits only if a slot is free.
-- XAU — perp only on `bitget_perpetual`.
+- XAU — perp only on `bitget_perpetual`. Quote BOTH perp legs (bid + ask) —
+  it is a plain two-sided perp book with no separate spot leg to hedge
+  against, so its own net perp position IS its delta. `midas_hedge` already
+  gives it a wider, proportional cap (not the flat BTC/SOL figure) so a
+  single $45 fill doesn't force an instant corrective trade.
+- Size$ is already confidence-scaled by `midas_signal` (tapers down as
+  P(informed) rises toward the CANCEL threshold — use it as-is, don't
+  re-derive size yourself).
 - Skip a side that would breach Size$ or the executor cap. One-sided is fine
   (that is how inventory starts).
 
@@ -176,8 +186,11 @@ refusal, not a suggestion.
 - Net delta outside the cap is a bug this tick.
 - `CANCEL` outranks you.
 - Base half-spread 0.10%; never tighter than 0.05% per side.
-- Never open a naked perp LONG. `SHORT_PERP` is a hedge.
-- XAU is perp-only.
+- Never open a naked perp LONG on BTC/SOL. `SHORT_PERP` is a hedge, not a bet.
+- XAU is perp-only: a perp BUY fill there is a normal two-sided MM inventory
+  leg, not "naked" — `midas_hedge`'s proportional cap (not the flat
+  BTC/SOL figure) is what bounds it, and reduces/closes it like any other
+  delta breach.
 - Routine error / no data → stand aside and journal it.
 
 ## Cheat sheet

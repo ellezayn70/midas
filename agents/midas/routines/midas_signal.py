@@ -13,11 +13,17 @@ decisions per pair, in one deterministic pass:
 2. QUOTE PRICES (adaptive + asymmetric spread): volatility widens the spread,
    trend skews it. In a downtrend, widen BUY / tighten SELL so inventory
    drifts short with the market; in an uptrend, the reverse. The hedge keeps
-   the residual delta ~0.
+   the residual delta ~0 (or, once a trend has persisted a few ticks, lets
+   it ride a bit further — see midas_hedge's trend-aware delta band).
 
 3. ARB CHECK (cross-exchange + basis): perp-vs-spot basis on Bitget itself,
    and a cross-exchange funding/price check against Binance where the data
    routine can reach it. Arb opportunities are additive volume, not the core.
+
+4. SIZE SCALE: below the hard CANCEL gate, size still tapers smoothly as
+   P(informed) rises toward the threshold — full size when the book is
+   calm, reduced (never below a floor) when marginal but not yet unsafe.
+   This replaces a binary "full size or nothing" with a soft risk dial.
 
 Signal layer only: NEVER places an order.
 """
@@ -26,26 +32,24 @@ import asyncio
 import json
 import logging
 import math
+import sys as _sys
 from pathlib import Path
 
 from pydantic import BaseModel, Field
 from telegram.ext import ContextTypes
 
-import importlib.util
-from pathlib import Path as _P
-
-def _midas_mod(name: str):
-    _p = _P(__file__).with_name(name + ".py")
-    _spec = importlib.util.spec_from_file_location("midas_" + name, _p)
-    _m = importlib.util.module_from_spec(_spec)
-    _spec.loader.exec_module(_m)
-    return _m
-
-_sz = _midas_mod("_midas_sizing")
+# `agents/` is not an importable package — reach this folder's sizing helper
+# by putting the folder on sys.path once, then a plain `import` (Python's
+# import cache dedupes this across every routine that also does it).
+_ROUTINES_DIR = str(Path(__file__).resolve().parent)
+if _ROUTINES_DIR not in _sys.path:
+    _sys.path.insert(0, _ROUTINES_DIR)
+import _midas_sizing as _sz
 
 per_side = _sz.per_side
 sizing_table = _sz.table
 read_json_memory = _sz.read_json_memory
+confidence_size_scale = _sz.confidence_size_scale
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +72,7 @@ class Config(BaseModel):
     """Compute MIDAS quote gates, adaptive spreads and arbitrage signals."""
 
     pairs: str = Field(
-        default="BTC-USDT,SOL-USDT",
+        default="BTC-USDT,SOL-USDT,XAU-USDT",
         description="Comma-separated pairs to compute signals for",
     )
     base_spread_pct: float = Field(
@@ -83,6 +87,11 @@ class Config(BaseModel):
     size_mode: str = Field(
         default="test",
         description="cup = $100/side all pairs; test = venue-floor sizes",
+    )
+    size_confidence_scaling: bool = Field(
+        default=True,
+        description="Taper size smoothly as P(informed) rises toward the CANCEL gate, "
+                     "instead of full size right up to the cliff edge",
     )
 
 
@@ -228,7 +237,12 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         basis_bps = micro.get("basis_bps")
         arb = arbitrage_check(mid, spot_mid, float(basis_bps) if basis_bps is not None else None)
 
-        size = per_side(pair, config.size_mode)
+        base_size = per_side(pair, config.size_mode)
+        scale = 1.0
+        if gate == "QUOTE" and config.size_confidence_scaling:
+            scale = confidence_size_scale(p_informed, config.informed_threshold)
+        size = round(base_size * scale, 2)
+
         row = {
             "Pair": pair,
             "Gate": gate,
@@ -236,7 +250,9 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
             "Buy@": f"{prices['buy']:.4f}",
             "Sell@": f"{prices['sell']:.4f}",
             "Spread": f"{prices['buy_spread_pct']:.3f}%/{prices['sell_spread_pct']:.3f}%",
-            "Size$": f"{size:.0f}",
+            "Size$": f"{size:.2f}",
+            "Scale": f"{scale:.2f}x" if scale != 1.0 else "1.00x",
+            "Trend": f"{trend} ({int(micro.get('trend_streak', 0) or 0)})",
             "Arb": (f"basis {basis_bps:+.1f} bps" if arb else "none"),
         }
         table.append(row)
@@ -246,7 +262,8 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
             f"{config.informed_threshold}) | buy {prices['buy']:.4f} / sell "
             f"{prices['sell']:.4f} | spreads "
             f"{prices['buy_spread_pct']:.3f}%/{prices['sell_spread_pct']:.3f}%"
-            f" | size ${size:.0f}/side"
+            f" | size ${size:.2f}/side (scale {scale:.2f}x)"
+            f" | trend {trend} (streak {int(micro.get('trend_streak', 0) or 0)})"
         )
         if arb:
             line += f" | ARB: {arb['action']} ({arb['basis_bps']:+.1f} bps)"
@@ -255,9 +272,10 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
     summary = (
         "MIDAS quote signals\n" + "\n".join(signals)
         + f"\n\nsize_mode={config.size_mode}. {sizing_table(config.size_mode)}. "
-        "QUOTE → place both limit legs at THIS pair's Size$. "
+        "QUOTE → place both limit legs at THIS pair's Size$ (already confidence-scaled). "
         "CANCEL → the ML shield detected an informed trader: cancel ALL quotes "
-        "on this pair, wait 1 tick, re-evaluate. Arb rows are additive volume."
+        "on this pair, wait 1 tick, re-evaluate. Arb rows are additive volume. "
+        "Trend streak feeds midas_hedge/midas_selfheal's trend-aware delta band."
     )
 
     from condor.reports import ReportBuilder
@@ -266,8 +284,8 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
     builder.source("routine", "midas_signal").tags(["midas", "market-making", "ml"])
     builder.kpi("Quoting", str(sum(1 for r in table if r.get("Gate") == "QUOTE")))
     builder.kpi("Shielded", str(sum(1 for r in table if r.get("Gate") == "CANCEL")))
-    builder.section("01 / SIGNALS", "Per-pair quote gate, prices and arb.")
-    builder.table(table, ["Pair", "Gate", "P(informed)", "Buy@", "Sell@", "Spread", "Size$", "Arb"])
+    builder.section("01 / SIGNALS", "Per-pair quote gate, prices, size scale and arb.")
+    builder.table(table, ["Pair", "Gate", "P(informed)", "Buy@", "Sell@", "Spread", "Size$", "Scale", "Trend", "Arb"])
     builder.manual_order()
     report_id = await builder.save()
 

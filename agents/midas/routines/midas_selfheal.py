@@ -11,8 +11,12 @@ unhedged spot book is the one thing that must never persist.
 This routine is the non-LLM backstop. It runs every tick (the engine calls it
 deterministically after the LLM turn, win or timeout, when the strategy sets
 `self_heal_routine: midas_selfheal`). It reads exchange truth, recomputes the
-delta verdict, and FORCE-PLACES the hedge via the executor API if the net delta
-is outside the cap and no matching perp executor is already RUNNING.
+delta verdict using the SAME proportional-to-size + trend-widened cap that
+midas_hedge uses (never the flat fallback — otherwise this backstop would
+immediately clamp back the exact room midas_hedge intentionally gave a
+persisting trend or a bigger-floor perp-only pair like XAU), and FORCE-PLACES
+the hedge via the executor API if the net delta is outside that cap and no
+matching perp executor is already RUNNING.
 
 It is the ONLY MIDAS routine permitted to place an order outside the LLM turn.
 Signal routines (midas_data/_signal/_hedge) never do.
@@ -28,8 +32,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sys as _sys
 from pathlib import Path as _P
-import importlib.util
 
 from pydantic import BaseModel, Field
 from telegram.ext import ContextTypes
@@ -38,25 +42,22 @@ logger = logging.getLogger(__name__)
 
 CATEGORY = "Safety"
 
+# `agents/` is not an importable package — reach this folder's sibling
+# modules by putting the folder on sys.path once, then plain `import`
+# (Python's import cache dedupes this across every routine that also does
+# it, and across the two modules this file needs).
+_ROUTINES_DIR = str(_P(__file__).resolve().parent)
+if _ROUTINES_DIR not in _sys.path:
+    _sys.path.insert(0, _ROUTINES_DIR)
+import _midas_sizing as _sz
+import midas_hedge as _hedge
 
-def _midas_mod(name: str):
-    _p = _P(__file__).with_name(name + ".py")
-    _spec = importlib.util.spec_from_file_location("midas_" + name, _p)
-    if _spec is None or _spec.loader is None:  # pragma: no cover - guard
-        raise ImportError(f"cannot load MIDAS module {name}")
-    _m = importlib.util.module_from_spec(_spec)
-    _spec.loader.exec_module(_m)
-    return _m
-
-
-_sz = _midas_mod("_midas_sizing")
 _per_side, _max_delta = _sz.per_side, _sz.max_delta
 read_json_memory = _sz.read_json_memory
 write_json_memory = _sz.write_json_memory
 mem_key = _sz.mem_key
-
-# hedge_verdict lives in midas_hedge (it imports the same _midas_sizing helpers).
-_hedge = _midas_mod("midas_hedge")
+is_perp_only = _sz.is_perp_only
+trend_widen_multiplier = _sz.trend_widen_multiplier
 hedge_verdict = _hedge.hedge_verdict
 
 
@@ -64,15 +65,27 @@ def per_side(pair: str, mode: str = "test") -> float:
     return _per_side(pair, mode)
 
 
-def max_delta(mode: str = "test") -> float:
-    return _max_delta(mode)
+async def _effective_max_delta(pair: str, size_mode: str, trend_widen_enabled: bool) -> tuple[float, str]:
+    """Same proportional + trend-aware cap midas_hedge computes, read from the
+    same persisted trend-streak state, so this backstop never fights the
+    room the main hedge routine already gave a persisting trend."""
+    delta_cap = _max_delta(size_mode, pair=pair)
+    note = ""
+    if trend_widen_enabled:
+        rec = await read_json_memory(mem_key("midas_trend", pair))
+        streak = int(rec.get("streak", 0) or 0)
+        mult = trend_widen_multiplier(streak)
+        if mult > 1.0:
+            delta_cap = round(delta_cap * mult, 2)
+            note = f" [trend x{mult:.2f}]"
+    return delta_cap, note
 
 
 class Config(BaseModel):
     """Deterministic delta-drift reconcile — force-hedge if the LLM did not."""
 
     pairs: str = Field(
-        default="BTC-USDT,SOL-USDT",
+        default="BTC-USDT,SOL-USDT,XAU-USDT",
         description="Comma-separated pairs to reconcile (HB format)",
     )
     size_mode: str = Field(
@@ -86,6 +99,11 @@ class Config(BaseModel):
     user_id: int = Field(
         default=0,
         description="Owning chat/user id (set by the engine for get_client)",
+    )
+    trend_widen_enabled: bool = Field(
+        default=True,
+        description="Use the same trend-widened cap midas_hedge computes, instead of "
+                     "the flat fallback, so this backstop doesn't fight a persisting trend",
     )
     # Dry-run: compute + report, but do NOT place orders. Useful to prove the
     # logic without risking capital. The engine passes dry_run=False in prod.
@@ -164,7 +182,7 @@ def _hedge_executor_config(pair: str, hedge_usd: float, controller_id: str, amou
         "type": "position_executor",
         "connector_name": "bitget_perpetual",
         "trading_pair": pair,
-        "side": 2,  # SELL = open a SHORT on perp
+        "side": 2,  # SELL = open/add a SHORT on perp (reduces a perp-only long too)
         "total_amount_quote": round(hedge_usd, 2),
         "leverage": 1,
         "controller_id": controller_id,  # INSIDE executor_config (risk gate reads it here)
@@ -206,27 +224,34 @@ async def reconcile(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
     actions: list[str] = []
     placed: list[dict] = []
     for pair in pairs:
+        perp_only = is_perp_only(pair)
         perp_usd = positions.get(pair, 0.0)
-        spot_usd = float(spot_wallet.get(pair, 0.0) or 0.0)
-        if abs(spot_usd) < 1.0:
-            rec = await read_json_memory(mem_key("midas_spot", pair))
-            try:
-                spot_usd = float(rec.get("usd", 0) or 0)
-            except (TypeError, ValueError):
-                spot_usd = 0.0
-        v = hedge_verdict(spot_usd, perp_usd, _sz.max_delta(config.size_mode))
+
+        if perp_only:
+            spot_usd = 0.0
+        else:
+            spot_usd = float(spot_wallet.get(pair, 0.0) or 0.0)
+            if abs(spot_usd) < 1.0:
+                rec = await read_json_memory(mem_key("midas_spot", pair))
+                try:
+                    spot_usd = float(rec.get("usd", 0) or 0)
+                except (TypeError, ValueError):
+                    spot_usd = 0.0
+
+        delta_cap, widen_note = await _effective_max_delta(pair, config.size_mode, config.trend_widen_enabled)
+        v = hedge_verdict(spot_usd, perp_usd, delta_cap)
         if v["action"] == "OK":
             continue
         # Unhedged drift detected. Don't double-hedge if one is already live.
         if await _already_hedging(client, controller_id, pair):
-            actions.append(f"  • {pair}: {v['action']} (hedge already RUNNING) — skip")
+            actions.append(f"  • {pair}: {v['action']} (cap {delta_cap:.1f}{widen_note}, hedge already RUNNING) — skip")
             continue
         hedge_usd = min(v["hedge_usd"], per_side(pair, config.size_mode)) if v["hedge_usd"] else 0.0
         if hedge_usd < 1.0:
             actions.append(f"  • {pair}: {v['action']} but hedge_usd {hedge_usd:.1f} < floor — skip")
             continue
         if config.dry_run:
-            actions.append(f"  • {pair}: DRY-RUN {v['action']} {hedge_usd:.1f} USD (not placed)")
+            actions.append(f"  • {pair}: DRY-RUN {v['action']} {hedge_usd:.1f} USD (cap {delta_cap:.1f}{widen_note}, not placed)")
             continue
         try:
             # amount (base units) is REQUIRED by the API: hedge_usd / perp mid.
@@ -250,7 +275,7 @@ async def reconcile(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
             cfg = _hedge_executor_config(pair, hedge_usd, controller_id, amount=amount)
             await client.executors.create_executor(executor_config=cfg, account_name="master_account")
             placed.append({"pair": pair, "action": v["action"], "usd": hedge_usd})
-            actions.append(f"  • {pair}: FORCE-HEDGED {v['action']} {hedge_usd:.1f} USD ✅")
+            actions.append(f"  • {pair}: FORCE-HEDGED {v['action']} {hedge_usd:.1f} USD (cap {delta_cap:.1f}{widen_note}) ✅")
             # Remember so the LLM tick + journal see the heal.
             await write_json_memory(
                 mem_key("midas_selfheal", pair),

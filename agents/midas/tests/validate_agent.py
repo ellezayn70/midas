@@ -83,7 +83,7 @@ for s in strats:
         print("  [FAIL] risk_limits must be nested and require_triple_barrier=true")
         ok = False
     exp = slugify(s.name)
-    d = (REPO / "agents/midas/strategies" / exp).is_dir()
+    d = (REPO / "agents/midas/loops" / exp).is_dir()
     ok &= d
     print(f"  [{'OK' if d else 'FAIL'}] folder '{exp}' matches slugified name")
 

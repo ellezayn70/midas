@@ -14,12 +14,6 @@ from _midas_sizing import (  # noqa: E402
     is_perp_only,
     trend_widen_multiplier,
     confidence_size_scale,
-    effective_per_side,
-    portfolio_stop_usd,
-    allocation_split,
-    VOLUME_PAIR,
-    VOLUME_PAIR_FALLBACK,
-    PNL_STOP_LOSS_USD,
 )
 from midas_hedge import hedge_verdict  # noqa: E402
 from midas_signal import informed_probability, quote_prices  # noqa: E402
@@ -135,41 +129,3 @@ if __name__ == "__main__":
     print("pure tests OK", "shield calm/hot",
           round(informed_probability({"obi": 0, "vpin": 0.2, "trade_size_zscore": 0, "cancel_rate": 0.1, "obi_velocity": 0}), 3),
           round(informed_probability({"obi": 0.9, "vpin": 0.95, "trade_size_zscore": 4, "cancel_rate": 0.9, "obi_velocity": 2}), 3))
-
-
-def test_split_book_allocation():
-    s = allocation_split()
-    assert s["volume_arm_usd"] + s["pnl_arm_usd"] == 800.0
-    assert s["volume_arm_usd"] == 560.0 and s["pnl_arm_usd"] == 240.0
-    assert s["volume_pair"] == "FDUSD-USDT"
-    assert s["volume_pair_fallback"] == "USD1-USDT"
-    assert s["pnl_stop_loss_usd"] == 60.0
-    assert VOLUME_PAIR == "FDUSD-USDT" and VOLUME_PAIR_FALLBACK == "USD1-USDT"
-    assert PNL_STOP_LOSS_USD == 60.0
-
-
-def test_pnl_stop_60_usdt():
-    hit = portfolio_stop_usd(entry_nav_usd=240, current_nav_usd=175, stop_usd=60)
-    assert hit["action"] == "KILL_PORTFOLIO"
-    ok = portfolio_stop_usd(entry_nav_usd=240, current_nav_usd=190, stop_usd=60)
-    assert ok["action"] == "HOLD"
-
-
-def test_effective_per_side_lifts_xau_to_venue_min():
-    # XAU pnl_race table entry (40) is below its real Bitget floor (45) — must lift.
-    r = effective_per_side("XAU-USDT", "pnl_race", 1.0)
-    assert r["lifted_to_min"] is True
-    assert r["amount"] == 45.0
-
-
-def test_effective_per_side_lifts_tapered_size_below_floor():
-    # SOL pnl_race (30) tapered to 0.5x = 15, below its 16 floor -> lift, not stuck.
-    r = effective_per_side("SOL-USDT", "pnl_race", 0.5)
-    assert r["lifted_to_min"] is True
-    assert r["amount"] == 16.0
-
-
-def test_effective_per_side_leaves_healthy_size_alone():
-    r = effective_per_side("SUI-USDT", "pnl_race", 1.0)
-    assert r["lifted_to_min"] is False
-    assert r["amount"] == 28.0

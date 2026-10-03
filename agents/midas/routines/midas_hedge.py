@@ -61,7 +61,7 @@ class Config(BaseModel):
     """Compute delta-neutral hedge requirements for MIDAS pairs."""
 
     pairs: str = Field(
-        default="BTC-USDT,SOL-USDT,XAU-USDT",
+        default="SUI-USDT,SOL-USDT,XAU-USDT",
         description="Comma-separated pairs to hedge (HB format)",
     )
     max_delta_usd: float = Field(
@@ -74,8 +74,8 @@ class Config(BaseModel):
         description="Cup fallback if size_mode=cup",
     )
     size_mode: str = Field(
-        default="test",
-        description="cup = $100/side; test = venue-floor sizes",
+        default="pnl_race",
+        description="cup=$100/side; test=venue-floor; pnl_race=$28-40/side on $240 P&L sleeve",
     )
     trend_widen_enabled: bool = Field(
         default=True,

@@ -47,6 +47,7 @@ if _ROUTINES_DIR not in _sys.path:
 import _midas_sizing as _sz
 
 per_side = _sz.per_side
+effective_per_side = _sz.effective_per_side
 sizing_table = _sz.table
 read_json_memory = _sz.read_json_memory
 confidence_size_scale = _sz.confidence_size_scale
@@ -72,7 +73,7 @@ class Config(BaseModel):
     """Compute MIDAS quote gates, adaptive spreads and arbitrage signals."""
 
     pairs: str = Field(
-        default="BTC-USDT,SOL-USDT,XAU-USDT",
+        default="SUI-USDT,SOL-USDT,XAU-USDT",
         description="Comma-separated pairs to compute signals for",
     )
     base_spread_pct: float = Field(
@@ -85,8 +86,8 @@ class Config(BaseModel):
         default=100.0, description="Cup fallback if size_mode=cup"
     )
     size_mode: str = Field(
-        default="test",
-        description="cup = $100/side all pairs; test = venue-floor sizes",
+        default="pnl_race",
+        description="cup=$100/side; test=venue-floor; pnl_race=$28-40/side on $240 P&L sleeve",
     )
     size_confidence_scaling: bool = Field(
         default=True,
@@ -237,11 +238,12 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
         basis_bps = micro.get("basis_bps")
         arb = arbitrage_check(mid, spot_mid, float(basis_bps) if basis_bps is not None else None)
 
-        base_size = per_side(pair, config.size_mode)
         scale = 1.0
         if gate == "QUOTE" and config.size_confidence_scaling:
             scale = confidence_size_scale(p_informed, config.informed_threshold)
-        size = round(base_size * scale, 2)
+        sized = effective_per_side(pair, config.size_mode, scale)
+        size = sized["amount"]
+        lifted = sized["lifted_to_min"]
 
         row = {
             "Pair": pair,
@@ -250,7 +252,7 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
             "Buy@": f"{prices['buy']:.4f}",
             "Sell@": f"{prices['sell']:.4f}",
             "Spread": f"{prices['buy_spread_pct']:.3f}%/{prices['sell_spread_pct']:.3f}%",
-            "Size$": f"{size:.2f}",
+            "Size$": f"{size:.2f}" + (" (min)" if lifted else ""),
             "Scale": f"{scale:.2f}x" if scale != 1.0 else "1.00x",
             "Trend": f"{trend} ({int(micro.get('trend_streak', 0) or 0)})",
             "Arb": (f"basis {basis_bps:+.1f} bps" if arb else "none"),
@@ -262,7 +264,8 @@ async def run(config: Config, context: ContextTypes.DEFAULT_TYPE) -> str:
             f"{config.informed_threshold}) | buy {prices['buy']:.4f} / sell "
             f"{prices['sell']:.4f} | spreads "
             f"{prices['buy_spread_pct']:.3f}%/{prices['sell_spread_pct']:.3f}%"
-            f" | size ${size:.2f}/side (scale {scale:.2f}x)"
+            f" | size ${size:.2f}/side (scale {scale:.2f}x"
+            + (", lifted to venue min" if lifted else "") + ")"
             f" | trend {trend} (streak {int(micro.get('trend_streak', 0) or 0)})"
         )
         if arb:

@@ -85,7 +85,7 @@ class Config(BaseModel):
     """Deterministic delta-drift reconcile — force-hedge if the LLM did not."""
 
     pairs: str = Field(
-        default="BTC-USDT,SOL-USDT,XAU-USDT",
+        default="SUI-USDT,SOL-USDT,XAU-USDT",
         description="Comma-separated pairs to reconcile (HB format)",
     )
     size_mode: str = Field(
